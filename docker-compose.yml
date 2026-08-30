@@ -1,0 +1,122 @@
+# Full stack: `docker compose up --build`
+#
+# Runs with no third-party API keys. The default LLM provider is the
+# deterministic local one, so the whole system works out of the box; set
+# RESOLVE_LLM_PROVIDER=anthropic and RESOLVE_LLM_API_KEY to use a real model.
+
+name: resolve
+
+x-app-env: &app-env
+  RESOLVE_ENVIRONMENT: local
+  RESOLVE_LOG_JSON: "true"
+  RESOLVE_DB_URL: postgresql+asyncpg://resolve:resolve@postgres:5432/resolve
+  RESOLVE_REDIS_URL: redis://redis:6379/0
+  RESOLVE_LLM_PROVIDER: ${RESOLVE_LLM_PROVIDER:-mock}
+  RESOLVE_LLM_API_KEY: ${RESOLVE_LLM_API_KEY:-}
+  RESOLVE_OTEL_ENABLED: "true"
+  RESOLVE_OTEL_ENDPOINT: http://otel-collector:4318/v1/traces
+  PYTHONPATH: /app/src
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: resolve
+      POSTGRES_PASSWORD: resolve
+      POSTGRES_DB: resolve
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U resolve -d resolve"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redisdata:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    environment: *app-env
+    ports: ["8000:8000"]
+    volumes:
+      # Evaluation reports are runtime output, not image content. Without a
+      # volume they live in the container's ephemeral filesystem and vanish
+      # whenever the container is recreated — so `make up` after `make eval`
+      # would silently lose the report the console is displaying.
+      - evalresults:/app/evals/results
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  agent-worker:
+    build: .
+    command: ["python", "-m", "resolve.workers.agent_worker"]
+    environment: *app-env
+    # The image defines an HTTP healthcheck for the API. This service is a
+    # queue consumer with no HTTP listener, so that check can only ever fail —
+    # and a container permanently reporting "unhealthy" is worse than no signal,
+    # because it trains you to ignore the column where a real failure appears.
+    # Liveness here is the process itself: if the worker exits, Compose's
+    # restart policy handles it.
+    healthcheck:
+      disable: true
+    depends_on:
+      api: {condition: service_started}
+    # Horizontal scale: `docker compose up --scale agent-worker=4`. Leases and
+    # workflow checkpointing make concurrent workers safe.
+    deploy:
+      replicas: 2
+
+  outbox-dispatcher:
+    build: .
+    command: ["python", "-m", "resolve.workers.outbox_dispatcher"]
+    environment: *app-env
+    # The image defines an HTTP healthcheck for the API. This service is a
+    # queue consumer with no HTTP listener, so that check can only ever fail —
+    # and a container permanently reporting "unhealthy" is worse than no signal,
+    # because it trains you to ignore the column where a real failure appears.
+    # Liveness here is the process itself: if the worker exits, Compose's
+    # restart policy handles it.
+    healthcheck:
+      disable: true
+    depends_on:
+      api: {condition: service_started}
+
+  console:
+    build:
+      context: ./console
+    environment:
+      RESOLVE_API_URL: http://api:8000
+      RESOLVE_API_KEY: dev-local-key
+    ports: ["3000:3000"]
+    depends_on:
+      api: {condition: service_started}
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-config.yaml"]
+    volumes:
+      - ./scripts/otel-config.yaml:/etc/otel-config.yaml:ro
+    ports: ["4318:4318"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./scripts/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+
+volumes:
+  pgdata:
+  redisdata:
+  evalresults:

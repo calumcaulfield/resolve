@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# Databases and local state
+*.db
+*.sqlite3
+data/
+
+# Evaluation output: `latest-*.json` is committed as a published result;
+# timestamped runs are not.
+evals/results/*
+!evals/results/latest-*.json
+!evals/results/.gitkeep
+
+# Node / console
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Editor and sed backups
+*.bak
+*.orig
+*~
+
+# macOS duplicates. Copying a folder in Finder produces "name 2", which no
+# pattern written for "name/" will match — so they get committed by accident.
+* 2
+* 2.*
+*\ 2/
+.DS_Store

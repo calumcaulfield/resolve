@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Everything below runs with the deterministic provider: no API key, no
+  # network calls, no cost, and identical results on every run.
+  RESOLVE_LLM_PROVIDER: mock
+  RESOLVE_ENVIRONMENT: ci
+  RESOLVE_LOG_LEVEL: WARNING
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests evals
+
+      - name: Format check
+        run: ruff format --check src tests evals
+
+      - name: Type check
+        run: mypy src
+
+      - name: Test
+        run: pytest tests -q --cov=resolve --cov-report=term-missing
+
+      # The part most CI pipelines for LLM systems do not have: a quality gate
+      # on the model's behaviour. A prompt change that degrades classification
+      # accuracy, escalation precision or adversarial containment fails here.
+      - name: Evaluation quality gate
+        run: PYTHONPATH=src:. python -m evals.runner --gate
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals/results/
+
+  # The console ships with the repo, so it is built here. Without this a broken
+  # console would only be discovered by someone cloning and running it.
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t resolve:ci .
+
+      - name: Smoke test the image
+        run: |
+          docker run --rm -e RESOLVE_LLM_PROVIDER=mock -e PYTHONPATH=/app/src \
+            resolve:ci python -m resolve.cli demo --limit 5
+
+      # Guards a real regression. The evaluation dashboard once read the report
+      # off the filesystem, which worked locally and was impossible in Docker
+      # because the console image does not contain `evals/`. It failed by
+      # rendering a legitimate-looking empty state, so nothing appeared wrong.
+      # This exercises the whole path the way an operator does.
+      - name: Start the stack
+        run: |
+          docker compose up --build -d
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8000/healthz >/dev/null && break
+            sleep 2
+          done
+          docker compose ps
+
+      - name: Evaluation dashboard is empty before a run, not fabricated
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "x-api-key: dev-local-key" http://localhost:8000/v1/evals/latest)
+          [ "$CODE" = "404" ] || { echo "::error::expected 404 before any eval, got $CODE"; exit 1; }
+
+      - name: make seed && make eval
+        run: |
+          make seed
+          make eval
+
+      - name: The API serves the report it just generated
+        run: |
+          curl -sf -H "x-api-key: dev-local-key" \
+            http://localhost:8000/v1/evals/latest -o report.json
+          python -c "
+          import json, sys
+          d = json.load(open('report.json'))
+          assert d['source'].startswith('latest-'), d['source']
+          assert d['report']['total_cases'] > 0, 'no cases in served report'
+          print('served', d['source'], '-', d['report']['passed'], '/', d['report']['total_cases'])
+          "
+
+      - name: Every console page renders, and /evals shows the report
+        run: |
+          for path in "" tickets approvals evals; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3000/$path")
+            [ "$CODE" = "200" ] || { echo "::error::/$path returned $CODE"; exit 1; }
+          done
+          curl -s http://localhost:3000/evals -o evals.html
+          grep -q "No evaluation has been run" evals.html \
+            && { echo "::error::/evals shows an empty state after make eval"; exit 1; }
+          grep -q "Cases passed" evals.html \
+            || { echo "::error::/evals did not render the report"; exit 1; }
+          echo "console renders the evaluation report"
+
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose logs --tail=100
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

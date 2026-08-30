@@ -1,0 +1,36 @@
+# Build context hygiene.
+#
+# Evaluation results are runtime output, not build input. Baking a report into
+# the image would mean a freshly started stack showed results from whenever the
+# image happened to be built — which looks like the system works and is a lie.
+evals/results/*
+!evals/results/.gitkeep
+
+# The console is built from its own context (see docker-compose.yml).
+console/
+
+# Local environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Never ship secrets or local state
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite3
+
+# Not needed at runtime
+.git/
+.github/
+docs/
+tests/
+*.md
+!README.md

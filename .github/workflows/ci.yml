@@ -19,6 +19,12 @@ env:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    # `resolve` is installed from src, but `evals` is a top-level package that
+    # the tests import, so the repo root has to be on the path too. Set once on
+    # the job rather than per step, which is how it came to be missing from the
+    # test step while the eval step had it.
+    env:
+      PYTHONPATH: src:.
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +54,7 @@ jobs:
       # on the model's behaviour. A prompt change that degrades classification
       # accuracy, escalation precision or adversarial containment fails here.
       - name: Evaluation quality gate
-        run: PYTHONPATH=src:. python -m evals.runner --gate
+        run: python -m evals.runner --gate
 
       - name: Upload evaluation report
         if: always()

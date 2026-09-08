@@ -40,12 +40,12 @@ delivery date invented, or a customer told their parcel is safe when it is lost.
 
 For each inbound message it runs a five-stage loop, all of it observable:
 
-| Stage | What happens |
-|---|---|
-| **Triage** | A cheap model classifies intent, urgency and confidence, and extracts the order reference. PII is stripped before anything reaches a provider. |
-| **Retrieve** | Hybrid search (dense embeddings + BM25) over the policy corpus finds the passages that govern the answer. |
-| **Plan** | A stronger model proposes a sequence of typed tool calls, or declares that a human is needed. |
-| **Act** | Every proposed call passes the policy engine first. Read-only calls run. Anything that moves money or changes fulfilment is queued for a human. |
+| Stage              | What happens                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Triage**         | A low-cost model classifies intent, urgency and confidence, and extracts the order reference. PII is stripped before anything reaches a model provider. |
+| **Retrieve**       | Hybrid search (dense embeddings + BM25) over the policy corpus finds the passages that govern the answer.                                               |
+| **Plan**           | A higher-capability model proposes a sequence of typed tool calls, or declares that a human is needed.                                                  |
+| **Act**            | Every proposed call passes the policy engine first. Read-only calls run. Anything that moves money or changes fulfilment is queued for a human.         |
 | **Draft → Verify** | A reply is drafted from retrieved facts only, then a second pass checks every claim against those facts. A reply that fails verification is never sent. |
 
 ## Results
@@ -55,33 +55,33 @@ that the repository cannot re-derive.
 
 ### Evaluation — 30-case golden set
 
-| Metric | Result |
-|---|---|
-| Cases passed | **30 / 30** |
-| Intent accuracy · macro-F1 | **100%** · **1.000** |
-| Outcome accuracy | **100%** |
-| Escalation precision · recall | **100%** · **100%** |
-| Tool precision · recall | 90.9% · 100% |
-| Groundedness | **100%** |
-| Replies carrying a policy citation | **100%** |
-| Adversarial messages contained | **5 / 5** |
-| Mean cost per ticket | $0.0175 |
-| Latency p50 · p95 | 2 ms · 3 ms |
+| Metric                             | Result               |
+| ---------------------------------- | -------------------- |
+| Cases passed                       | **30 / 30**          |
+| Intent accuracy · macro-F1         | **100%** · **1.000** |
+| Outcome accuracy                   | **100%**             |
+| Escalation precision · recall      | **100%** · **100%**  |
+| Tool precision · recall            | 90.9% · 100%         |
+| Groundedness                       | **100%**             |
+| Replies carrying a policy citation | **100%**             |
+| Adversarial messages contained     | **5 / 5**            |
+| Mean cost per ticket               | $0.0175              |
+| Latency p50 · p95                  | 2 ms · 3 ms          |
 
 > **Read these honestly.** They were produced by the bundled **deterministic provider**,
 > not by a frontier model. What they measure is the pipeline, the safety layer, the
 > retrieval quality and the golden set — and a rule-based classifier scoring 100% on a
 > set its rules were tuned against is a weak signal on its own. What is *not* weak is
-> that the harness exists, runs in CI, and blocks merges. Point it at a real model with
-> `make eval PROVIDER=anthropic` and the same numbers are produced the same way.
+> that the harness exists, runs in CI, and blocks merges. Point it at any supported
+> external provider and the same evaluation pipeline measures it in exactly the same way.
 
 ### Behaviour on the 24-message synthetic inbox
 
-| Outcome | Share | Meaning |
-|---|---:|---|
-| Auto-resolved | 50% | Handled end to end, reply grounded and cited |
-| Awaiting approval | 25% | Correct action identified, human must authorise |
-| Escalated | 25% | Correctly refused: complaints, unclassifiable requests, attacks |
+| Outcome           | Share | Meaning                                                         |
+| ----------------- | ----: | --------------------------------------------------------------- |
+| Auto-resolved     |   50% | Handled end to end, reply grounded and cited                    |
+| Awaiting approval |   25% | Correct action identified, human must authorise                 |
+| Escalated         |   25% | Correctly refused: complaints, unclassifiable requests, attacks |
 
 Half the inbox handled with no human, and — the number that actually matters — **zero
 incorrect autonomous actions**, including on five adversarial messages.
@@ -92,12 +92,12 @@ Over-automation is the expensive failure mode. An unnecessary escalation costs a
 minutes. An incorrect auto-resolution reaches a customer, and in this domain it can
 move money. So the system escalates when:
 
-- classification confidence is below the threshold;
-- the drafted reply cites no supporting policy;
-- verification finds a claim the retrieved facts do not support;
-- the per-ticket budget would be exceeded — it stops rather than reasoning with less;
-- the message shows signs of prompt injection;
-- published service policy says a person must handle it, as with complaints.
+* classification confidence is below the threshold;
+* the drafted reply cites no supporting policy;
+* verification finds a claim the retrieved facts do not support;
+* the per-ticket budget would be exceeded — it stops rather than reasoning with less;
+* the message shows signs of prompt injection;
+* published service policy says a person must handle it, as with complaints.
 
 ## Human authorisation
 
@@ -109,17 +109,17 @@ reply was voided rather than sent, and the trace records who decided and why.</e
 
 Resolve separates five concerns that are usually collapsed into one:
 
-| Concern | Question |
-|---|---|
-| **AI decision-making** | What should be done? |
-| **Policy enforcement** | May the agent do it alone? |
-| **Human authorisation** | Does a person permit it? |
-| **Execution** | Did it actually happen? |
-| **Auditability** | Who decided, when, and why? |
+| Concern                 | Question                    |
+| ----------------------- | --------------------------- |
+| **AI decision-making**  | What should be done?        |
+| **Policy enforcement**  | May the agent do it alone?  |
+| **Human authorisation** | Does a person permit it?    |
+| **Execution**           | Did it actually happen?     |
+| **Auditability**        | Who decided, when, and why? |
 
 A decision on a privileged action produces a durable chain:
 
-```
+```text
 APPROVAL REQUESTED
   → HUMAN DECISION: REJECTED     attributed, timestamped, with a recorded reason
   → ACTION NOT EXECUTED          an explicit outcome, not an absence
@@ -130,13 +130,13 @@ APPROVAL REQUESTED
 Three distinctions make that possible, and each is a column rather than a
 convention:
 
-- **Decision ≠ outcome.** `decision` is what a person intended; `outcome` is
+* **Decision ≠ outcome.** `decision` is what a person intended; `outcome` is
   what happened. An approved refund the commerce backend then refuses is
   `approved` / `execution_failed` — a state neither field expresses alone.
-- **A draft is not a sent message.** `ReplyState` tracks `provisional`,
+* **A draft is not a sent message.** `ReplyState` tracks `provisional`,
   `awaiting_approval`, `sent`, `voided`, `held`. A reply describing a refund a
   human refused is voided, so it can never be presented as the outcome.
-- **Every trace event is attributed.** Human decisions are appended to the
+* **Every trace event is attributed.** Human decisions are appended to the
   agent's own timeline, tagged `human`, so one ordered story shows where the
   machine stopped and a person took over.
 
@@ -277,17 +277,28 @@ and a command that runs anywhere else operates on a different world than the one
 serving traffic. Host equivalents (`make seed-local`, `make eval-local`,
 `make eval-gate-local`) exist for CI, which has Python but no running stack.
 
-### Using a real model
+### Provider portability
+
+Resolve's model layer is provider-agnostic. The deterministic local provider is
+the default because it makes the repository reproducible, testable and usable
+without external credentials.
+
+External model providers can be connected behind the same protocol without
+changing the agent loop, workflow engine, safety layer or evaluation harness.
+
+A provider implementation supplies the model interface; the rest of the system
+continues to work against the same typed contract.
+
+For an external provider, configure the provider name and its API credential:
 
 ```bash
-pip install 'resolve[anthropic]'
-export RESOLVE_LLM_PROVIDER=anthropic
-export RESOLVE_LLM_API_KEY=sk-ant-...
+export RESOLVE_LLM_PROVIDER=<provider>
+export RESOLVE_LLM_API_KEY=<api-key>
 make eval
 ```
 
-Nothing else changes. The provider sits behind a protocol; the agent, the workflow
-engine and the evaluation harness do not know which one is in use.
+The evaluation report records which provider produced the run, allowing the same
+golden set and thresholds to be used when comparing implementations.
 
 ## The ops console
 
@@ -337,7 +348,7 @@ is measured and a system that is vibed.
 
 ## Project layout
 
-```
+```text
 src/resolve/
   agent/          the loop, the typed tool registry, the policy engine
   llm/            provider abstraction, routing, cache, cost ledger, prompt registry
@@ -365,25 +376,25 @@ is new work.
 
 The portfolio this belongs to has a rule against overstating things, so:
 
-- **Every order, customer, policy and ticket is synthetic**, generated by
+* **Every order, customer, policy and ticket is synthetic**, generated by
   `src/resolve/seed/generate.py` from a fixed seed. There is no real customer data here.
-- **The evaluation figures above come from the deterministic provider.** They measure the
+* **The evaluation figures above come from the deterministic provider.** They measure the
   machinery, not model quality. The report file records which provider produced it.
-- **The "hours saved" figure in the console is a model, not a measurement.** It applies
+* **The "hours saved" figure in the console is a model, not a measurement.** It applies
   published assumptions to observed outcomes, and the console shows the assumptions
   beside the number so it can be argued with.
-- **This system has not run in production.** It is engineered as though it would, and the
+* **This system has not run in production.** It is engineered as though it would, and the
   parts that make that claim credible — durable state, leases, idempotency, dead-letter
   handling, an eval gate, an audit trail — are implemented and tested, not described.
 
 ## Documentation
 
-| | |
-|---|---|
+|                                                  |                                                                                     |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------- |
 | [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md) | Components, data flow, sequence diagrams, data model, failure modes, scaling limits |
-| [CASE_STUDY.md](CASE_STUDY.md) | The problem, the constraints, what was built, what it cost, what I would change |
-| [TECHNICAL_DECISIONS.md](TECHNICAL_DECISIONS.md) | Sixteen ADRs: context, options weighed, decision, consequences |
-| [ROADMAP.md](ROADMAP.md) | Shipped, next, later — and what is deliberately out of scope |
+| [CASE_STUDY.md](CASE_STUDY.md)                   | The problem, the constraints, what was built, what it cost, what I would change     |
+| [TECHNICAL_DECISIONS.md](TECHNICAL_DECISIONS.md) | Sixteen ADRs: context, options weighed, decision, consequences                      |
+| [ROADMAP.md](ROADMAP.md)                         | Shipped, next, later — and what is deliberately out of scope                        |
 
 ---
 
